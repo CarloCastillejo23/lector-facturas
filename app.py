@@ -1,23 +1,77 @@
 """Lector de facturas: sube fotos o PDFs y descarga los datos en Excel.
 
-Funciona sin APIs de pago: lee el texto de PDFs digitales y usa OCR (Tesseract)
-para fotos y PDFs escaneados.
+Lee gratis con OCR (texto de PDFs digitales y Tesseract para fotos) y, si los datos
+no cuadran, usa la IA Claude Haiku 5.5. La API key va en los Secrets de Streamlit.
 
 Ejecutar con:  streamlit run app.py
 """
+import base64
+import os
 from datetime import datetime
+from pathlib import Path
 
+import anthropic
 import pandas as pd
 import streamlit as st
 
 from excel import generar_excel
-from extractor import ErrorExtraccion, extraer_factura
+from extractor import ErrorExtraccion
+from ia import MODOS, Uso, procesar
 
-st.set_page_config(page_title="Lector de facturas", page_icon="🧾", layout="wide")
-st.title("🧾 Lector de facturas")
-st.caption("Sube fotos o PDFs de facturas y obtén sus datos en un Excel.")
+ASSETS = Path(__file__).parent / "assets"
+MORADO, VERDE = "#2E1E7E", "#66CCA1"
+
+st.set_page_config(page_title="Lector de facturas · Respaldo Tributario",
+                   page_icon=str(ASSETS / "icono.png"), layout="wide")
+
+# La tipografía y los colores base están en .streamlit/config.toml
+st.markdown(f"""
+<style>
+.rt-header {{ display:flex; align-items:center; gap:1.25rem; flex-wrap:wrap;
+    padding-bottom:1rem; margin-bottom:1.5rem; border-bottom:4px solid {VERDE}; }}
+.rt-header img {{ height:64px; width:auto; max-width:100%; }}
+.rt-header .rt-tit {{ font-weight:700; font-size:1.6rem; color:{MORADO}; line-height:1.1;
+    padding-left:1.25rem; border-left:2px solid #D9D4EE; }}
+.rt-header .rt-sub {{ font-size:1rem; color:#5B5480; font-weight:400; }}
+@media (max-width: 640px) {{
+    .rt-header img {{ height:44px; }}
+    .rt-header .rt-tit {{ border-left:none; padding-left:0; font-size:1.3rem; }}
+}}
+[data-testid="stMetricValue"] {{ color:{MORADO}; font-weight:700; }}
+[data-testid="stFileUploaderDropzone"] {{ border:2px dashed {VERDE}; background:#F6FBF9; }}
+</style>
+""", unsafe_allow_html=True)
+
+logo_b64 = base64.b64encode((ASSETS / "logo.png").read_bytes()).decode()
+st.markdown(f"""
+<div class="rt-header">
+  <img src="data:image/png;base64,{logo_b64}" alt="Respaldo Tributario">
+  <div class="rt-tit">Lector de facturas
+    <div class="rt-sub">Sube fotos o PDFs de facturas y obtén sus datos en un Excel.</div>
+  </div>
+</div>
+""", unsafe_allow_html=True)
+
+st.logo(str(ASSETS / "logo_blanco.png"), size="large", icon_image=str(ASSETS / "icono.png"))
+
+def _api_key() -> str | None:
+    try:
+        if "ANTHROPIC_API_KEY" in st.secrets:
+            return st.secrets["ANTHROPIC_API_KEY"]
+    except Exception:  # no hay archivo de secrets
+        pass
+    return os.environ.get("ANTHROPIC_API_KEY")
+
+
+API_KEY = _api_key()
 
 with st.sidebar:
+    st.header("Modo de lectura")
+    modo = st.radio("Modo", list(MODOS), format_func=MODOS.get, label_visibility="collapsed",
+                    disabled=not API_KEY, index=0 if API_KEY else 1)
+    if not API_KEY:
+        st.caption("IA desactivada: falta la API key de Anthropic en los Secrets de Streamlit "
+                   "(ANTHROPIC_API_KEY).")
     st.header("Consejos")
     st.markdown(
         "- **PDF original** (no escaneado): mejor resultado.\n"
@@ -34,20 +88,24 @@ archivos = st.file_uploader(
 
 if "resultados" not in st.session_state:
     st.session_state.resultados = []
+    st.session_state.uso = None
 
 if st.button("Extraer datos", type="primary", disabled=not archivos):
+    client = anthropic.Anthropic(api_key=API_KEY) if API_KEY and modo != "ocr" else None
+    uso = Uso()
     resultados, errores = [], []
     progreso = st.progress(0.0, text="Procesando…")
     for i, archivo in enumerate(archivos):
         progreso.progress(i / len(archivos), text=f"Leyendo {archivo.name}…")
         try:
-            resultados.append((archivo.name, extraer_factura(archivo.getvalue(), archivo.type)))
+            resultados.append((archivo.name, procesar(archivo.getvalue(), archivo.type, modo, client, uso)))
         except ErrorExtraccion as e:
             errores.append(f"{archivo.name}: {e}")
         except Exception as e:  # archivo dañado, formato no soportado, etc.
             errores.append(f"{archivo.name}: no se pudo leer ({e})")
     progreso.empty()
     st.session_state.resultados = resultados
+    st.session_state.uso = uso
     for err in errores:
         st.error(err)
 
@@ -58,19 +116,34 @@ def _monto(v):
 
 resultados = st.session_state.resultados
 if resultados:
-    st.success(f"{len(resultados)} factura(s) procesada(s).")
+    con_ia = sum(r.uso_ia for _, r in resultados)
+    uso = st.session_state.uso
+    resumen = f"{len(resultados)} factura(s) procesada(s)"
+    if con_ia:
+        resumen += (f" · {con_ia} con IA · costo aprox. US$ {uso.costo_usd:.4f} "
+                    f"({uso.tokens_entrada:,} tokens de entrada, {uso.tokens_salida:,} de salida)")
+    st.success(resumen + ".")
     st.download_button(
         "⬇️ Descargar Excel",
-        data=generar_excel(resultados),
+        data=generar_excel([(n, r.factura) for n, r in resultados]),
         file_name=f"facturas_{datetime.now():%Y%m%d_%H%M}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         type="primary",
     )
 
-    for nombre, f in resultados:
+    for nombre, r in resultados:
+        f = r.factura
         titulo = f"{nombre} — {f.tipo_documento or 'Documento'} {f.numero_factura or ''}"
+        if r.uso_ia:
+            titulo += " · ✨ IA"
         with st.expander(titulo, expanded=len(resultados) == 1):
             st.caption(f"Lectura: {f.metodo_lectura} · Confianza: {f.confianza}")
+            if r.uso_ia and modo == "auto":
+                st.caption("Se usó la IA porque en el OCR: " + "; ".join(r.motivos) + ".")
+            elif r.motivos and not r.uso_ia:
+                st.warning("Revisa esta factura: " + "; ".join(r.motivos) + ".")
+            if r.aviso:
+                st.info(r.aviso)
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Fecha", f.fecha_emision or "—")
             c2.metric("Subtotal", _monto(f.subtotal))
