@@ -1,25 +1,27 @@
-"""Lectura de facturas con IA (Claude Haiku 5.5) y modo híbrido OCR + IA.
+"""Lectura de facturas con IA (Google Gemini) y modo híbrido OCR + IA.
 
 Modo híbrido: primero se lee gratis con OCR + reglas; solo si los datos no cuadran
 (faltan campos clave o las sumas no coinciden) se envía la factura a la IA.
 """
 from __future__ import annotations
 
-import base64
 import io
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-import anthropic
+from google import genai
+from google.genai import errors as genai_errors
+from google.genai import types
 from PIL import Image, ImageOps
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from extractor import DatoAdicional, ErrorExtraccion, Factura, Impuesto, Item, Parte, extraer_factura
 
-MODELO_IA = "claude-haiku-5-5"
-PRECIO_ENTRADA = 0.10 / 1_000_000   # US$ por token (prompts de hasta 100K tokens)
-PRECIO_SALIDA = 0.50 / 1_000_000
-LADO_MAXIMO_IA = 1600  # px: suficiente para leer una factura y mantiene bajo el costo
+MODELO_IA = "gemini-3.5-flash-lite"
+# Precios del nivel de pago (US$ por token). En el nivel gratuito de Google AI Studio el costo es 0.
+PRECIO_ENTRADA = 0.30 / 1_000_000
+PRECIO_SALIDA = 2.50 / 1_000_000   # incluye los tokens de razonamiento
+LADO_MAXIMO_IA = 1600  # px: suficiente para leer una factura y mantiene bajo el consumo
 
 MODOS = {
     "auto": "Automático: OCR gratis y la IA solo si algo no cuadra",
@@ -96,20 +98,16 @@ def problemas(f: Factura) -> list[str]:
 
 # ---------- Llamada a la IA ----------
 
-def _bloque(datos: bytes, tipo_mime: str) -> dict:
+def _parte_documento(datos: bytes, tipo_mime: str) -> types.Part:
     if tipo_mime == "application/pdf":
-        return {"type": "document", "source": {
-            "type": "base64", "media_type": "application/pdf",
-            "data": base64.standard_b64encode(datos).decode()}}
+        return types.Part.from_bytes(data=datos, mime_type="application/pdf")
     img = ImageOps.exif_transpose(Image.open(io.BytesIO(datos)))
     if img.mode not in ("RGB", "L"):
         img = img.convert("RGB")
     img.thumbnail((LADO_MAXIMO_IA, LADO_MAXIMO_IA))
     salida = io.BytesIO()
     img.save(salida, format="JPEG", quality=88)
-    return {"type": "image", "source": {
-        "type": "base64", "media_type": "image/jpeg",
-        "data": base64.standard_b64encode(salida.getvalue()).decode()}}
+    return types.Part.from_bytes(data=salida.getvalue(), mime_type="image/jpeg")
 
 
 @dataclass
@@ -119,30 +117,39 @@ class Uso:
 
     @property
     def costo_usd(self) -> float:
+        """Costo si la key es del nivel de pago (en el nivel gratuito es 0)."""
         return self.tokens_entrada * PRECIO_ENTRADA + self.tokens_salida * PRECIO_SALIDA
 
 
-def extraer_con_ia(client: anthropic.Anthropic, datos: bytes, tipo_mime: str, uso: Uso) -> FacturaIA:
-    respuesta = client.messages.parse(
-        model=MODELO_IA,
-        max_tokens=8000,
-        output_config={"effort": "low"},  # extracción simple: poco razonamiento, menos tokens
-        messages=[{"role": "user", "content": [
-            _bloque(datos, tipo_mime),
-            {"type": "text", "text": INSTRUCCIONES},
-        ]}],
-        output_format=FacturaIA,
-    )
-    uso.tokens_entrada += respuesta.usage.input_tokens
-    uso.tokens_salida += respuesta.usage.output_tokens
+def crear_cliente(api_key: str) -> genai.Client:
+    return genai.Client(api_key=api_key)
 
-    if respuesta.stop_reason == "refusal":
-        raise ErrorExtraccion("la IA no pudo procesar este documento")
-    if respuesta.stop_reason == "max_tokens":
+
+def extraer_con_ia(client: genai.Client, datos: bytes, tipo_mime: str, uso: Uso) -> FacturaIA:
+    respuesta = client.models.generate_content(
+        model=MODELO_IA,
+        contents=[_parte_documento(datos, tipo_mime), INSTRUCCIONES],
+        config=types.GenerateContentConfig(
+            response_mime_type="application/json",
+            response_json_schema=FacturaIA.model_json_schema(),
+            max_output_tokens=8000,
+        ),
+    )
+    meta = respuesta.usage_metadata
+    if meta:
+        uso.tokens_entrada += meta.prompt_token_count or 0
+        uso.tokens_salida += (meta.candidates_token_count or 0) + (meta.thoughts_token_count or 0)
+
+    candidato = respuesta.candidates[0] if respuesta.candidates else None
+    motivo_fin = str(candidato.finish_reason) if candidato and candidato.finish_reason else ""
+    if "MAX_TOKENS" in motivo_fin:
         raise ErrorExtraccion("la factura es demasiado larga para la IA; la respuesta quedó incompleta")
-    if respuesta.parsed_output is None:
+    if not respuesta.text:
+        raise ErrorExtraccion(f"la IA no devolvió datos ({motivo_fin or 'respuesta bloqueada'})")
+    try:
+        return FacturaIA.model_validate_json(respuesta.text)
+    except ValidationError:
         raise ErrorExtraccion("no se pudo interpretar la respuesta de la IA")
-    return respuesta.parsed_output
 
 
 # ---------- Proceso completo ----------
@@ -156,7 +163,7 @@ class Resultado:
 
 
 def procesar(datos: bytes, tipo_mime: str, modo: str,
-             client: Optional[anthropic.Anthropic], uso: Uso) -> Resultado:
+             client: Optional[genai.Client], uso: Uso) -> Resultado:
     ocr: Optional[Factura] = None
     error_ocr: Optional[Exception] = None
     try:
@@ -172,12 +179,12 @@ def procesar(datos: bytes, tipo_mime: str, modo: str,
             raise error_ocr
         aviso = None
         if motivos and modo != "ocr" and client is None:
-            aviso = "Configura la API key para que la IA revise las facturas que no cuadran."
+            aviso = "Configura la API key de Gemini para que la IA revise las facturas que no cuadran."
         return Resultado(ocr, motivos=motivos, aviso=aviso)
 
     try:
         ia = extraer_con_ia(client, datos, tipo_mime, uso)
-    except (ErrorExtraccion, anthropic.APIError) as e:
+    except (ErrorExtraccion, genai_errors.APIError) as e:
         if ocr is None:
             raise ErrorExtraccion(f"no se pudo leer con OCR ni con IA ({e})")
         return Resultado(ocr, motivos=motivos, aviso=f"La IA falló ({e}); se muestran los datos del OCR.")
@@ -185,7 +192,6 @@ def procesar(datos: bytes, tipo_mime: str, modo: str,
     factura = Factura(**ia.model_dump(),
                       texto_completo=ocr.texto_completo if ocr else "",
                       metodo_lectura=f"IA ({MODELO_IA})")
-    pendientes = problemas(factura)
-    factura.confianza = "alta" if not pendientes else "media"
+    factura.confianza = "alta" if not problemas(factura) else "media"
     return Resultado(factura, uso_ia=True,
                      motivos=motivos if modo == "auto" else ["modo Siempre con IA"])
