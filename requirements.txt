@@ -6,4 +6,5 @@ pydantic
 pytesseract
 pdfplumber
 pdf2image
-anthropic>=2.14
+google-genai>=3.6
+
