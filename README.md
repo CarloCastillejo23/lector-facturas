@@ -6,6 +6,14 @@ Foto o PDF escaneado → OCR gratuito con Tesseract.
 Reglas automáticas buscan: número, fechas, emisor y cliente (RUC, NIT, RFC, CUIT, RUT, RIF, DNI), dirección, teléfono, correo, ítems, subtotal, impuestos (IVA, IGV…), total, forma de pago y autorización.
 El Excel trae las hojas Facturas, Items, Impuestos, Otros datos y Texto completo.
 
+IA opcional: Claude Haiku 5.5 (modo híbrido)
+En modo Automático, cada factura se lee primero gratis con OCR. Si algo no cuadra (falta el número, la fecha, el RUC o el total; cantidad × precio ≠ total; los ítems no suman el subtotal o el total), esa factura se envía a la IA Claude Haiku 5.5. Costo aproximado: US$ 0.0005–0.002 por factura enviada a la IA.
+
+Para activarla en Streamlit Cloud: Manage app → Settings → Secrets y pega:
+
+ANTHROPIC_API_KEY = "sk-ant-..."
+La API key nunca se sube a GitHub. Sin ella, la app funciona igual en modo Solo OCR.
+
 Publicar gratis en Streamlit Community Cloud
 Sube esta carpeta a un repositorio de GitHub.
 Entra a https://share.streamlit.io e inicia sesión con GitHub.
