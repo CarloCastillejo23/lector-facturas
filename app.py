@@ -1,7 +1,7 @@
 """Lector de facturas: sube fotos o PDFs y descarga los datos en Excel.
 
 Lee gratis con OCR (texto de PDFs digitales y Tesseract para fotos) y, si los datos
-no cuadran, usa la IA Claude Haiku 5.5. La API key va en los Secrets de Streamlit.
+no cuadran, usa la IA Google Gemini. La API key va en los Secrets de Streamlit.
 
 Ejecutar con:  streamlit run app.py
 """
@@ -10,13 +10,13 @@ import os
 from datetime import datetime
 from pathlib import Path
 
-import anthropic
+
 import pandas as pd
 import streamlit as st
 
 from excel import generar_excel
 from extractor import ErrorExtraccion
-from ia import MODOS, Uso, procesar
+from ia import MODOS, Uso, crear_cliente, procesar
 
 RAIZ = Path(__file__).parent
 MORADO, VERDE = "#2E1E7E", "#66CCA1"
@@ -73,11 +73,11 @@ if LOGO_BLANCO:
 
 def _api_key() -> str | None:
     try:
-        if "ANTHROPIC_API_KEY" in st.secrets:
-            return st.secrets["ANTHROPIC_API_KEY"]
+        if "GEMINI_API_KEY" in st.secrets:
+            return st.secrets["GEMINI_API_KEY"]
     except Exception:  # no hay archivo de secrets
         pass
-    return os.environ.get("ANTHROPIC_API_KEY")
+    return os.environ.get("GEMINI_API_KEY")
 
 
 API_KEY = _api_key()
@@ -87,8 +87,8 @@ with st.sidebar:
     modo = st.radio("Modo", list(MODOS), format_func=MODOS.get, label_visibility="collapsed",
                     disabled=not API_KEY, index=0 if API_KEY else 1)
     if not API_KEY:
-        st.caption("IA desactivada: falta la API key de Anthropic en los Secrets de Streamlit "
-                   "(ANTHROPIC_API_KEY).")
+        st.caption("IA desactivada: falta la API key de Gemini en los Secrets de Streamlit "
+                   "(GEMINI_API_KEY).")
     st.header("Consejos")
     st.markdown(
         "- **PDF original** (no escaneado): mejor resultado.\n"
@@ -108,7 +108,7 @@ if "resultados" not in st.session_state:
     st.session_state.uso = None
 
 if st.button("Extraer datos", type="primary", disabled=not archivos):
-    client = anthropic.Anthropic(api_key=API_KEY) if API_KEY and modo != "ocr" else None
+    client = crear_cliente(API_KEY) if API_KEY and modo != "ocr" else None
     uso = Uso()
     resultados, errores = [], []
     progreso = st.progress(0.0, text="Procesando…")
@@ -137,7 +137,7 @@ if resultados:
     uso = st.session_state.uso
     resumen = f"{len(resultados)} factura(s) procesada(s)"
     if con_ia:
-        resumen += (f" · {con_ia} con IA · costo aprox. US$ {uso.costo_usd:.4f} "
+        resumen += (f" · {con_ia} con IA · costo aprox. US$ {uso.costo_usd:.4f} con key de pago, US$ 0 en el nivel gratuito "
                     f"({uso.tokens_entrada:,} tokens de entrada, {uso.tokens_salida:,} de salida)")
     st.success(resumen + ".")
     st.download_button(
