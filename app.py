@@ -18,11 +18,22 @@ from excel import generar_excel
 from extractor import ErrorExtraccion
 from ia import MODOS, Uso, procesar
 
-ASSETS = Path(__file__).parent / "assets"
+RAIZ = Path(__file__).parent
 MORADO, VERDE = "#2E1E7E", "#66CCA1"
 
+
+def imagen(nombre: str) -> Path | None:
+    """Busca la imagen en assets/ o, si se subió suelta, en la raíz del repositorio."""
+    for ruta in (RAIZ / "assets" / nombre, RAIZ / nombre):
+        if ruta.is_file():
+            return ruta
+    return None
+
+
+LOGO, LOGO_BLANCO, ICONO = imagen("logo.png"), imagen("logo_blanco.png"), imagen("icono.png")
+
 st.set_page_config(page_title="Lector de facturas · Respaldo Tributario",
-                   page_icon=str(ASSETS / "icono.png"), layout="wide")
+                   page_icon=str(ICONO) if ICONO else "🧾", layout="wide")
 
 # La tipografía y los colores base están en .streamlit/config.toml
 st.markdown(f"""
@@ -42,17 +53,23 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-logo_b64 = base64.b64encode((ASSETS / "logo.png").read_bytes()).decode()
+if LOGO:
+    logo_html = (f'<img src="data:image/png;base64,{base64.b64encode(LOGO.read_bytes()).decode()}" '
+                 'alt="Respaldo Tributario">')
+else:  # sin archivo de logo: el nombre de la marca en texto
+    logo_html = (f'<div style="font-weight:700;font-size:1.9rem;line-height:1;color:{MORADO}">'
+                 'RESPALDO<br>TRIBUTARIO</div>')
 st.markdown(f"""
 <div class="rt-header">
-  <img src="data:image/png;base64,{logo_b64}" alt="Respaldo Tributario">
+  {logo_html}
   <div class="rt-tit">Lector de facturas
     <div class="rt-sub">Sube fotos o PDFs de facturas y obtén sus datos en un Excel.</div>
   </div>
 </div>
 """, unsafe_allow_html=True)
 
-st.logo(str(ASSETS / "logo_blanco.png"), size="large", icon_image=str(ASSETS / "icono.png"))
+if LOGO_BLANCO:
+    st.logo(str(LOGO_BLANCO), size="large", icon_image=str(ICONO or LOGO_BLANCO))
 
 def _api_key() -> str | None:
     try:
