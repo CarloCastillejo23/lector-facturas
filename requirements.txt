@@ -6,3 +6,4 @@ pydantic
 pytesseract
 pdfplumber
 pdf2image
+anthropic>=2.14
