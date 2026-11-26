@@ -1,0 +1,21 @@
+# Colores del Manual de Identidad Corporativa — Respaldo Tributario
+# Morado WEB #2E1E7E · Verde WEB #66CCA1 · Tipografía: Bahnschrift Bold
+# (en la web se usa Barlow Semi Condensed, la alternativa libre más parecida)
+
+[theme]
+base = "light"
+primaryColor = "#2E1E7E"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#EEF8F4"
+textColor = "#1B1446"
+linkColor = "#2E1E7E"
+borderColor = "#D9D4EE"
+baseRadius = "0.5rem"
+font = "'Barlow Semi Condensed':https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600;700&display=swap"
+headingFontWeights = [700, 700, 600, 600, 600, 600]
+
+[theme.sidebar]
+backgroundColor = "#2E1E7E"
+textColor = "#FFFFFF"
+secondaryBackgroundColor = "#3A2A8C"
+borderColor = "#4A3A9C"
