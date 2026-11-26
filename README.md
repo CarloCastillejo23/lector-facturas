@@ -6,12 +6,14 @@ Foto o PDF escaneado → OCR gratuito con Tesseract.
 Reglas automáticas buscan: número, fechas, emisor y cliente (RUC, NIT, RFC, CUIT, RUT, RIF, DNI), dirección, teléfono, correo, ítems, subtotal, impuestos (IVA, IGV…), total, forma de pago y autorización.
 El Excel trae las hojas Facturas, Items, Impuestos, Otros datos y Texto completo.
 
-IA opcional: Claude Haiku 5.5 (modo híbrido)
-En modo Automático, cada factura se lee primero gratis con OCR. Si algo no cuadra (falta el número, la fecha, el RUC o el total; cantidad × precio ≠ total; los ítems no suman el subtotal o el total), esa factura se envía a la IA Claude Haiku 5.5. Costo aproximado: US$ 0.0005–0.002 por factura enviada a la IA.
+IA opcional: Google Gemini (modo híbrido)
+En modo Automático, cada factura se lee primero gratis con OCR. Si algo no cuadra (falta el número, la fecha, el RUC o el total; cantidad × precio ≠ total; los ítems no suman el subtotal o el total), esa factura se envía a Gemini 3.5 Flash-Lite.
 
-Para activarla en Streamlit Cloud: Manage app → Settings → Secrets y pega:
+Nivel gratuito de Google AI Studio: US$ 0, con límites de solicitudes por minuto/día. Google puede usar los datos enviados para mejorar sus productos.
+Nivel de pago: ~US$ 0.003 por factura enviada a la IA; los datos no se usan para mejorar productos.
+Crea la key en https://aistudio.google.com → Get API key. Luego en Streamlit Cloud: Manage app → Settings → Secrets y pega:
 
-ANTHROPIC_API_KEY = "sk-ant-..."
+GEMINI_API_KEY = "AIza..."
 La API key nunca se sube a GitHub. Sin ella, la app funciona igual en modo Solo OCR.
 
 Publicar gratis en Streamlit Community Cloud
